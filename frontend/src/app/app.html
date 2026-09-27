@@ -1,0 +1,194 @@
+@if (state(); as game) {
+  <div class="app-shell" [class.has-scoreboard]="game.phase !== 'setup'">
+    @if (game.phase !== 'setup') {
+      <header class="scoreboard-wrap">
+        <div class="scoreboard" aria-label="Team scoreboard">
+          @for (team of game.teams; track trackTeam($index, team)) {
+            <article class="score-card" [class.gold]="team.rank === 1" [class.silver]="team.rank === 2" [class.bronze]="team.rank === 3">
+              <div class="rank">#{{ team.rank }}</div>
+              <div class="team-copy">
+                <strong>{{ team.name }}</strong>
+                <span class="category-label">{{ team.category?.icon || '○' }} {{ team.category?.short_name || 'Choose category' }}</span>
+              </div>
+              <button class="score-btn minus" (click)="adjustScore(team.id, -1)" aria-label="Remove one point">−</button>
+              <b class="score">{{ team.score }}</b>
+              <button class="score-btn plus" (click)="adjustScore(team.id, 1)" aria-label="Add one point">+</button>
+            </article>
+          }
+        </div>
+      </header>
+    }
+
+    @if (error()) { <div class="error-toast" role="alert">{{ error() }}</div> }
+
+    <main>
+      @switch (game.phase) {
+        @case ('setup') {
+          <section class="screen setup-screen">
+            <div class="brand-mark">REAL <span>or</span> AI?</div>
+            <p class="eyebrow">THE GROUP GAME</p>
+            <h1>How many people<br />are playing?</h1>
+            <p class="lead">We’ll randomly create teams of three. If needed, one or two teams will get a fourth player.</p>
+            <form class="player-form" (ngSubmit)="createGame()">
+              <button type="button" class="number-step" (click)="decrementPlayers()">−</button>
+              <input type="number" name="playerCount" min="6" max="100" [(ngModel)]="playerCount" autofocus />
+              <button type="button" class="number-step" (click)="incrementPlayers()">+</button>
+              <button class="primary big" type="submit" [disabled]="busy()">Create teams <span>→</span></button>
+            </form>
+          </section>
+        }
+
+        @case ('assignment') {
+          <section class="screen assignment-screen">
+            <div class="section-heading">
+              <p class="eyebrow">FIND YOUR TEAM</p>
+              <h1>{{ game.player_count }} players. {{ game.teams.length }} teams. Let’s go!</h1>
+              <p>Find your number, sit with your team, then get ready to choose your power category.</p>
+            </div>
+            <div class="team-grid">
+              @for (team of game.teams; track team.id) {
+                <article class="assignment-card">
+                  <span class="team-number">{{ team.name }}</span>
+                  <div class="member-list">
+                    @for (member of team.members; track member) { <span>Person <b>{{ member }}</b></span> }
+                  </div>
+                </article>
+              }
+            </div>
+            <div class="action-row">
+              <button class="primary big" (click)="continueToCategories()" [disabled]="busy()">Everyone found their team <span>→</span></button>
+            </div>
+          </section>
+        }
+
+        @case ('categories') {
+          <section class="screen categories-screen">
+            <div class="section-heading">
+              <p class="eyebrow">CHOOSE YOUR POWER CATEGORY</p>
+              <h1>Five categories. One choice per team.</h1>
+              <p>A correct answer is worth 2 points when it matches your chosen category. Special questions are always worth double.</p>
+            </div>
+            <div class="topic-strip">
+              @for (category of game.categories; track category.id; let number = $index) {
+                <article class="topic-card" [style.--accent]="category.color">
+                  <span class="topic-index">0{{ number + 1 }}</span>
+                  <span class="topic-icon">{{ category.icon }}</span>
+                  <strong>{{ category.name }}</strong>
+                  @if (category.double_points) { <em>DOUBLE POINTS</em> }
+                </article>
+              }
+            </div>
+            <div class="choices-grid">
+              @for (team of game.teams; track team.id) {
+                <label class="choice-row" [class.chosen]="team.category_id">
+                  <b>{{ team.name }}</b>
+                  <select [ngModel]="team.category_id || ''" (ngModelChange)="chooseCategory(team.id, $event)">
+                    <option value="" disabled>Choose a category…</option>
+                    @for (category of game.categories; track category.id) {
+                      @if (!category.double_points) {
+                        <option [value]="category.id">{{ category.icon }} {{ category.name }}</option>
+                      }
+                    }
+                  </select>
+                  <span class="choice-check">✓</span>
+                </label>
+              }
+            </div>
+            <div class="action-row">
+              <span>{{ game.teams.length - chosenTeamsCount() }} teams left</span>
+              <button class="primary big" (click)="startQuiz()" [disabled]="busy() || !allCategoriesChosen()">Start the game <span>→</span></button>
+            </div>
+          </section>
+        }
+
+        @case ('quiz') {
+          @if (game.current_question; as question) {
+            <section class="screen quiz-screen">
+              <div class="question-meta">
+                <span>ROUND {{ question.round }} / 3</span>
+                <span class="progress-track"><i [style.width.%]="(question.number / question.total) * 100"></i></span>
+                <span>QUESTION {{ question.number }} / {{ question.total }}</span>
+              </div>
+              <div class="question-layout">
+                <article class="question-panel" [style.--accent]="question.category.color">
+                  <div class="category-pill">{{ question.category.icon }} {{ question.category.name }}</div>
+                  @if (question.kicker) { <p class="question-kicker">{{ question.kicker }}</p> }
+                  @if (question.image) {
+                    <div class="art-frame"><img [src]="question.image" alt="Artwork for Picasso or AI question" /></div>
+                  }
+                  <blockquote [class.compact]="question.prompt.length > 260">{{ question.prompt }}</blockquote>
+                  @if (!game.revealed) {
+                    <button class="reveal-btn" (click)="reveal()" [disabled]="busy()"><span>✦</span> Reveal answer</button>
+                  } @else {
+                    <div class="answer-reveal" [class.real]="question.answer === 'REAL'" [class.ai]="question.answer === 'AI'">
+                      <p>THE ANSWER IS</p>
+                      <strong>{{ question.answer === 'REAL' ? 'REAL' : 'AI-GENERATED' }}</strong>
+                      <span>{{ question.explanation }}</span>
+                    </div>
+                  }
+                </article>
+
+                <div class="category-orbit" aria-label="Category cycle">
+                  <div class="orbit-center"><b>{{ question.number }}</b><span>of {{ question.total }}</span></div>
+                  @for (category of game.categories; track category.id) {
+                    <div class="orbit-item" [class.active]="category.id === question.category_id" [class.next]="isNextCategory(category)" [title]="category.name">
+                      <span>{{ category.icon }}</span><small>{{ category.short_name }}</small>
+                    </div>
+                  }
+                </div>
+
+                <aside class="round-controls">
+                  <p class="eyebrow">AWARD POINTS</p>
+                  <div class="award-list">
+                    @for (team of teamsByNumber(); track team.id) {
+                      <div class="award-row" [class.power-team]="team.category_id === question.category_id">
+                        <span><b>{{ team.name }}</b><small>{{ team.category_id === question.category_id ? 'POWER CATEGORY' : '' }}</small></span>
+                        <button (click)="adjustScore(team.id, -awardValue(team))">−{{ awardValue(team) }}</button>
+                        <strong>{{ team.score }}</strong>
+                        <button class="award-plus" (click)="adjustScore(team.id, awardValue(team))">+{{ awardValue(team) }}</button>
+                      </div>
+                    }
+                  </div>
+                  <button class="primary next-btn" (click)="nextQuestion()" [disabled]="busy() || !game.revealed">
+                    {{ question.number === question.total ? 'Show final scores' : 'Next question' }} <span>→</span>
+                  </button>
+                </aside>
+              </div>
+
+            </section>
+          }
+        }
+
+        @case ('results') {
+          <section class="screen results-screen">
+            <p class="eyebrow">FINAL SCOREBOARD</p>
+            <h1>And the winner is…</h1>
+            @if (game.teams[0]; as winner) {
+              <div class="winner-card">
+                <span class="trophy">🏆</span><p>1ST PLACE</p><h2>{{ winner.name }}</h2><b>{{ winner.score }} points</b>
+                <span>{{ winner.category?.icon }} Power category: {{ winner.category?.name }}</span>
+              </div>
+            }
+            <div class="final-ranking">
+              @for (team of game.teams; track team.id) {
+                <article [class.gold]="team.rank === 1" [class.silver]="team.rank === 2" [class.bronze]="team.rank === 3">
+                  <span class="final-rank">{{ team.rank }}</span><b>{{ team.name }}</b>
+                  <small>{{ team.category?.icon }} {{ team.category?.short_name }}</small>
+                  <strong>{{ team.score }} <em>pts</em></strong>
+                </article>
+              }
+            </div>
+            <button class="secondary big" (click)="resetGame()">Start a new game</button>
+          </section>
+        }
+      }
+    </main>
+
+    @if (game.phase !== 'setup' && game.phase !== 'results') {
+      <button class="new-game-link" (click)="resetGame()">↻ New game</button>
+    }
+    @if (busy()) { <div class="busy-bar"></div> }
+  </div>
+} @else {
+  <div class="loading-screen"><span>REAL <i>or</i> AI?</span></div>
+}
